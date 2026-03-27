@@ -22,6 +22,16 @@ export interface GalleryImage {
 const THUMB_MAX_WIDTH = 25;
 const GAP = 2; // columns between images
 
+// Monotonic counter for kitty image IDs — avoids birthday-paradox collisions
+// that occurred with the previous Math.random() * 254 approach.
+// Uses the full 24-bit range (1–16,777,215) supported by kitty's true-color encoding.
+let nextImageId = 1;
+function allocateImageId(): number {
+	const id = nextImageId;
+	nextImageId = (nextImageId % 0xffffff) + 1; // wrap at 16M, skip 0
+	return id;
+}
+
 // ── Kitty Unicode Placeholder Protocol ─────────────────────
 // Instead of rendering pixels directly (which ghost across tmux panes),
 // we transmit the image data and then output U+10EEEE placeholder
@@ -156,7 +166,8 @@ function buildPlaceholderRow(
 	// First cell: full diacritics (row + col)
 	line += PLACEHOLDER_CHAR + diacriticFor(row) + diacriticFor(0);
 
-	// Subsequent cells: only row diacritic (col auto-increments from left neighbor)
+	// Subsequent cells: no diacritics needed — kitty auto-increments
+	// column index from the left neighbor's col diacritic
 	for (let col = 1; col < columns; col++) {
 		line += PLACEHOLDER_CHAR;
 	}
@@ -258,13 +269,15 @@ export class ImageGallery implements Component {
 		const imageInfos: { imageId: number; rows: number; cols: number }[] = [];
 
 		for (const img of this.images) {
+			// getImageDimensions returns null for corrupt or unrecognised image data;
+			// fall back to a common aspect ratio so the thumbnail still renders.
 			const dims = getImageDimensions(img.data, img.mimeType) || {
 				widthPx: 800,
 				heightPx: 600,
 			};
 
 			const rows = calculateImageRows(dims, thumbWidth, getCellDimensions());
-			const imageId = Math.floor(Math.random() * 254) + 1;
+			const imageId = allocateImageId();
 			this.activeImageIds.push(imageId);
 
 			transmitImageWithPlaceholder(img.data, imageId, thumbWidth, rows);

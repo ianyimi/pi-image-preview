@@ -1,10 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-export const IMAGE_PLACEHOLDER_RE = /\[Image #(\d+)\]/g;
-export const SINGLE_IMAGE_PLACEHOLDER_RE = /\[Image #(\d+)\]/;
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
 	png: "image/png",
@@ -14,34 +10,6 @@ const IMAGE_MIME_BY_EXT: Record<string, string> = {
 	webp: "image/webp",
 };
 
-export function stripOuterQuotes(value: string): string {
-	if (
-		(value.startsWith('"') && value.endsWith('"')) ||
-		(value.startsWith("'") && value.endsWith("'"))
-	) {
-		return value.slice(1, -1);
-	}
-	return value;
-}
-
-export function normalizePastedPath(pasted: string): string | null {
-	const trimmed = pasted.trim();
-	if (!trimmed) return null;
-
-	const unquoted = stripOuterQuotes(trimmed);
-
-	try {
-		const url = new URL(unquoted);
-		if (url.protocol === "file:") {
-			return fileURLToPath(url);
-		}
-	} catch {
-		// Not a URL.
-	}
-
-	return unquoted.replace(/\\ /g, " ");
-}
-
 export function inferMimeType(filePath: string): string | null {
 	const ext = path.extname(filePath).replace(/^\./, "").toLowerCase();
 	return IMAGE_MIME_BY_EXT[ext] ?? null;
@@ -49,18 +17,26 @@ export function inferMimeType(filePath: string): string | null {
 
 export function looksLikeImagePath(filePath: string): boolean {
 	const mimeType = inferMimeType(filePath);
-	return (
-		mimeType !== null &&
-		fs.existsSync(filePath) &&
-		fs.statSync(filePath).isFile()
-	);
+	if (!mimeType) return false;
+	try {
+		return fs.statSync(filePath).isFile();
+	} catch {
+		return false;
+	}
 }
 
-export function isClipboardTempFile(filePath: string): boolean {
-	return (
-		path.dirname(filePath) === os.tmpdir() &&
-		path.basename(filePath).startsWith("pi-clipboard-")
-	);
+/** Async version of looksLikeImagePath — preferred in the poll path to avoid blocking the event loop. */
+export async function looksLikeImagePathAsync(
+	filePath: string,
+): Promise<boolean> {
+	const mimeType = inferMimeType(filePath);
+	if (!mimeType) return false;
+	try {
+		const stat = await fsp.stat(filePath);
+		return stat.isFile();
+	} catch {
+		return false;
+	}
 }
 
 export function resolveMaybeRelativePath(
@@ -68,33 +44,6 @@ export function resolveMaybeRelativePath(
 	cwd: string,
 ): string {
 	return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-}
-
-export function createImagePlaceholder(number: number): string {
-	return `[Image #${number}]`;
-}
-
-export function removeImagePlaceholders(text: string): string {
-	return text
-		.replace(IMAGE_PLACEHOLDER_RE, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-}
-
-export function sortByPlaceholderNumber<T extends { placeholder: string }>(
-	items: T[],
-): T[] {
-	return [...items].sort((left, right) => {
-		const leftMatch = left.placeholder.match(SINGLE_IMAGE_PLACEHOLDER_RE);
-		const rightMatch = right.placeholder.match(SINGLE_IMAGE_PLACEHOLDER_RE);
-		const leftNum = leftMatch
-			? Number.parseInt(leftMatch[1] ?? "0", 10)
-			: 0;
-		const rightNum = rightMatch
-			? Number.parseInt(rightMatch[1] ?? "0", 10)
-			: 0;
-		return leftNum - rightNum;
-	});
 }
 
 export function isScreenshotToolName(toolName: string): boolean {

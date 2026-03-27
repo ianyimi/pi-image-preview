@@ -1,17 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { ImageContent, ContentBlock } from "./content.ts";
 import { ImageGallery, type GalleryImage } from "./image-gallery.ts";
-import {
-	looksLikeImagePath,
-	isScreenshotToolResult,
-	collectTextContent,
-	extractSavedScreenshotPaths,
-	hasInlineImageContent,
-	resolveMaybeRelativePath,
-} from "./path-utils.ts";
 import { PREFER_INLINE_SCREENSHOT_PROMPT } from "./prompt.ts";
 import { upgradeScreenshotToolResult } from "./tool-result-upgrader.ts";
+import { debugLog } from "./debug.ts";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -22,8 +14,9 @@ type TrackedImage = {
 };
 
 export type ExtensionDeps = {
-	resolveCwd: () => string;
-	readImageContentFromPath: (filePath: string) => ImageContent | null;
+	readImageContentFromPathAsync: (
+		filePath: string,
+	) => Promise<ImageContent | null>;
 	maybeResizeImage?: (image: ImageContent) => Promise<ImageContent>;
 	loadImageContentFromPath: (
 		filePath: string,
@@ -31,7 +24,7 @@ export type ExtensionDeps = {
 };
 
 type PiLike = {
-	on(event: string, handler: (event: any, ctx: any) => any): void;
+	on(event: string, handler: (...args: any[]) => any): void;
 	sendUserMessage(
 		content: string | ContentBlock[],
 		options?: { deliverAs?: "steer" | "followUp" },
@@ -56,14 +49,34 @@ type CtxLike = {
 	};
 };
 
+/** Event shape for the "input" event from pi. */
+type InputEvent = {
+	text: string;
+	images?: ImageContent[];
+};
+
+/** Discriminated union for input handler return values. */
+type InputResult =
+	| { action: "continue" }
+	| { action: "handled" }
+	| { action: "transform"; text: string; images: ImageContent[] };
+
+/** Re-export for tool_result event typing. */
+type ToolResultEvent = import("./tool-result-upgrader.ts").ToolResultEventLike;
+
 // ── Constants ──────────────────────────────────────────────
 
 const WIDGET_KEY = "image-preview";
 const POLL_INTERVAL_MS = 250;
 
-// Matches absolute paths ending in image extensions
+// Matches image file paths:
+//   - Absolute: /path/to/image.png
+//   - Home-relative: ~/screenshots/image.png
+//   - Relative: ./images/image.png, ../images/image.png
+// Supports common path characters including spaces (escaped with \),
+// parens, #, +, and other special characters.
 const IMAGE_PATH_RE =
-	/((?:\/[\w.@~\-]+)+\.(?:png|jpe?g|gif|webp))\b/gi;
+	/((?:~\/|\.\.?\/|\/)[^\s:*?"<>|][^\s:*?"<>|]*\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
 
 /** Produce a label from an image path — just the filename. */
 function trimImageLabel(filePath: string): string {
@@ -99,6 +112,12 @@ export function registerImagePreviewExtension(
 			label: t.label,
 		}));
 
+		// Dispose the previous gallery to free kitty image resources before replacement
+		if (gallery) {
+			gallery.dispose();
+			gallery = null;
+		}
+
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(_tui: any, theme: any) => {
@@ -129,12 +148,14 @@ export function registerImagePreviewExtension(
 	/**
 	 * Scan editor text for image paths.
 	 * Track new ones, remove ones that are no longer in the text.
+	 * Async to avoid blocking the event loop with file I/O.
 	 */
-	function scanEditorText(ctx: CtxLike): void {
+	async function scanEditorText(ctx: CtxLike): Promise<void> {
 		let text: string;
 		try {
 			text = ctx.ui.getEditorText();
-		} catch {
+		} catch (err) {
+			debugLog("Failed to get editor text", err);
 			return;
 		}
 		if (!text) {
@@ -146,8 +167,9 @@ export function registerImagePreviewExtension(
 		}
 
 		// Find all image paths currently in the text
-		IMAGE_PATH_RE.lastIndex = 0;
-		const matches = [...text.matchAll(IMAGE_PATH_RE)];
+		// Create a fresh regex each time to avoid stale lastIndex from the `g` flag
+		const imagePathRe = new RegExp(IMAGE_PATH_RE.source, IMAGE_PATH_RE.flags);
+		const matches = [...text.matchAll(imagePathRe)];
 		const currentPaths = new Set<string>();
 
 		let changed = false;
@@ -160,9 +182,8 @@ export function registerImagePreviewExtension(
 			// Already tracked?
 			if (tracked.has(rawPath)) continue;
 
-			// New path — try to load it
-			if (!looksLikeImagePath(rawPath)) continue;
-			const image = deps.readImageContentFromPath(rawPath);
+			// New path — try to load it (async to avoid blocking event loop)
+			const image = await deps.readImageContentFromPathAsync(rawPath);
 			if (!image) continue;
 
 			tracked.set(rawPath, {
@@ -176,9 +197,14 @@ export function registerImagePreviewExtension(
 			if (deps.maybeResizeImage) {
 				const entry = tracked.get(rawPath)!;
 				void deps.maybeResizeImage(image).then((resized) => {
-					entry.image = resized;
-					if (latestCtx) refreshWidget(latestCtx);
-				}).catch(() => {});
+					// Guard against the entry having been removed while resize was in-flight
+					if (tracked.has(rawPath) && tracked.get(rawPath) === entry) {
+						entry.image = resized;
+						if (latestCtx) refreshWidget(latestCtx);
+					}
+				}).catch((err) => {
+					debugLog(`Failed to resize image ${rawPath}`, err);
+				});
 			}
 		}
 
@@ -199,9 +225,9 @@ export function registerImagePreviewExtension(
 		stopPolling();
 		pollTimer = setInterval(() => {
 			if (!latestCtx) return;
-			try {
-				scanEditorText(latestCtx);
-			} catch {}
+			scanEditorText(latestCtx).catch((err) => {
+				debugLog("Error during editor text scan", err);
+			});
 		}, POLL_INTERVAL_MS);
 	}
 
@@ -218,19 +244,31 @@ export function registerImagePreviewExtension(
 		return { systemPrompt: PREFER_INLINE_SCREENSHOT_PROMPT };
 	});
 
-	pi.on("session_start", async (_event: any, ctx: CtxLike) => {
+	// Clean up resources when the process exits
+	const cleanup = (): void => {
+		stopPolling();
+		if (gallery) {
+			gallery.dispose();
+			gallery = null;
+		}
+	};
+	process.on("exit", cleanup);
+	process.on("SIGINT", cleanup);
+	process.on("SIGTERM", cleanup);
+
+	pi.on("session_start", async (_event: unknown, ctx: CtxLike) => {
 		latestCtx = ctx;
 		resetDraft(ctx);
 		startPolling();
 	});
 
-	pi.on("session_switch", async (_event: any, ctx: CtxLike) => {
+	pi.on("session_switch", async (_event: unknown, ctx: CtxLike) => {
 		latestCtx = ctx;
 		resetDraft(ctx);
 		startPolling();
 	});
 
-	pi.on("tool_result", async (event: any, ctx: CtxLike) => {
+	pi.on("tool_result", async (event: ToolResultEvent, ctx: CtxLike) => {
 		latestCtx = ctx;
 		return upgradeScreenshotToolResult(
 			event,
@@ -240,18 +278,18 @@ export function registerImagePreviewExtension(
 	});
 
 	// On submit: strip image paths from text, attach actual images
-	pi.on("input", async (event: any, ctx: CtxLike) => {
+	pi.on("input", async (event: InputEvent, ctx: CtxLike): Promise<InputResult> => {
 		latestCtx = ctx;
 
 		if (tracked.size === 0) {
-			return { action: "continue" as const };
+			return { action: "continue" };
 		}
 
-		const fullText = (event.text as string || "").trim();
+		const fullText = (event.text || "").trim();
 
 		// Don't transform commands or shell escapes
 		if (fullText.startsWith("/") || fullText.trimStart().startsWith("!")) {
-			return { action: "continue" as const };
+			return { action: "continue" };
 		}
 
 		// Find which tracked paths are still in the submitted text
@@ -267,7 +305,7 @@ export function registerImagePreviewExtension(
 		}
 
 		if (usedImages.length === 0) {
-			return { action: "continue" as const };
+			return { action: "continue" };
 		}
 
 		// Clean up whitespace after stripping paths
@@ -282,11 +320,11 @@ export function registerImagePreviewExtension(
 				usedImages,
 				ctx.isIdle() ? undefined : { deliverAs: "steer" },
 			);
-			return { action: "handled" as const };
+			return { action: "handled" };
 		}
 
 		return {
-			action: "transform" as const,
+			action: "transform",
 			text: strippedText,
 			images: [...(event.images ?? []), ...usedImages],
 		};

@@ -4,10 +4,11 @@ import { pathToFileURL } from "node:url";
 import {
 	loadImageContentFromPath,
 	maybeResizeImage,
-	readImageContentFromPath,
+	readImageContentFromPathAsync,
 	type ImageResizer,
 } from "./src/image-content.ts";
 import { registerImagePreviewExtension } from "./src/extension-runtime.ts";
+import { debugLog } from "./src/debug.ts";
 
 let cachedResizerPromise: Promise<ImageResizer | null> | undefined;
 
@@ -38,7 +39,8 @@ async function loadPiImageResizer(): Promise<ImageResizer | null> {
 					mimeType: resized.mimeType,
 				};
 			};
-		} catch {
+		} catch (err) {
+			debugLog("Failed to load pi image resizer", err);
 			return null;
 		}
 	})();
@@ -48,8 +50,7 @@ async function loadPiImageResizer(): Promise<ImageResizer | null> {
 
 export default function (pi: any): void {
 	registerImagePreviewExtension(pi, {
-		resolveCwd: () => process.cwd(),
-		readImageContentFromPath,
+		readImageContentFromPathAsync,
 		maybeResizeImage: async (image) =>
 			maybeResizeImage(image, await loadPiImageResizer()),
 		loadImageContentFromPath: async (filePath) =>

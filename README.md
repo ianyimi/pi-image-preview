@@ -7,9 +7,9 @@ Image preview extension for [pi coding agent](https://github.com/mariozechner/pi
 ## Features
 
 - **Inline image preview** — paste an image (Ctrl+V) or drop a file, and a thumbnail renders above the editor
-- **Horizontal layout** — multiple images display side by side: `[Image #1]  [Image #2]`
+- **Horizontal layout** — multiple images display side by side with thumbnails
 - **tmux support** — uses kitty's Unicode placeholder protocol so images stay in their pane (no ghosting across panes)
-- **Auto-cleanup** — delete `[Image #1]` from your text and the preview disappears
+- **Auto-cleanup** — delete the image path from your text and the preview disappears
 - **No editor conflicts** — works alongside vim mode and other editor extensions (no `setEditorComponent`)
 - **Image resizing** — uses pi's built-in WASM image resizer for efficient thumbnails
 - **Screenshot integration** — automatically loads images from screenshot tool results
@@ -24,9 +24,9 @@ pi install npm:pi-image-preview
 
 1. **Paste** an image with `Ctrl+V` or drag-and-drop a file
 2. Pi's built-in handler saves the clipboard to a temp file and inserts the path into the editor
-3. The extension **detects the image path** (via polling), reads the image, and replaces the path with `[Image #1]`
+3. The extension **detects the image path** (via polling) and reads the image file
 4. A **thumbnail gallery** renders above the editor using kitty's Unicode placeholder protocol
-5. On **submit**, placeholders are stripped and images are attached to your message
+5. On **submit**, image paths are stripped from the text and the images are attached to your message
 
 ### tmux compatibility
 
@@ -45,9 +45,9 @@ Standard kitty graphics render pixels at absolute terminal positions, causing im
 │   image 1    │  │   image 2    │
 │  thumbnail   │  │  thumbnail   │
 └──────────────┘  └──────────────┘
-   [Image #1]        [Image #2]
+   photo.png        screenshot.png
 
-[Image #1] describe what you see [Image #2]
+/path/to/photo.png describe what you see /tmp/screenshot.png
 ```
 
 ## Requirements

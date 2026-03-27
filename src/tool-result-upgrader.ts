@@ -31,12 +31,17 @@ export async function upgradeScreenshotToolResult(
 	const savedPaths = extractSavedScreenshotPaths(text);
 	if (savedPaths.length === 0) return undefined;
 
+	const images: ImageContent[] = [];
 	for (const rawPath of savedPaths) {
 		const resolvedPath = resolveMaybeRelativePath(rawPath, cwd);
 		const image = await loadImageFromPath(resolvedPath);
 		if (image) {
-			return { content: [...event.content, image] };
+			images.push(image);
 		}
+	}
+
+	if (images.length > 0) {
+		return { content: [...event.content, ...images] };
 	}
 
 	const hint: TextContent = {
