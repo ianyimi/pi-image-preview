@@ -1,6 +1,6 @@
 # pi-image-preview
 
-Image preview extension for [pi coding agent](https://github.com/mariozechner/pi-coding-agent) — renders inline image thumbnails above the editor using the kitty graphics protocol with full tmux support.
+Image preview extension for [pi coding agent](https://github.com/badlogic/pi-mono) — renders inline image thumbnails above the editor using the kitty graphics protocol with full tmux support.
 
 ![Screenshot](screenshot.png)
 
