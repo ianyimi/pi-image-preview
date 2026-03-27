@@ -292,15 +292,12 @@ export function registerImagePreviewExtension(
 			return { action: "continue" };
 		}
 
-		// Find which tracked paths are still in the submitted text
+		// Collect images for all tracked paths in the submitted text
 		const usedImages: ImageContent[] = [];
-		let strippedText = fullText;
 
 		for (const [trackedPath, entry] of tracked) {
 			if (fullText.includes(trackedPath)) {
 				usedImages.push(entry.image);
-				// Strip the path from the text
-				strippedText = strippedText.split(trackedPath).join("");
 			}
 		}
 
@@ -308,24 +305,14 @@ export function registerImagePreviewExtension(
 			return { action: "continue" };
 		}
 
-		// Clean up whitespace after stripping paths
-		strippedText = strippedText.replace(/\s+/g, " ").trim();
-
 		// Clear state
 		resetDraft(ctx);
 
-		if (!strippedText) {
-			// Images only, no text — send directly
-			pi.sendUserMessage(
-				usedImages,
-				ctx.isIdle() ? undefined : { deliverAs: "steer" },
-			);
-			return { action: "handled" };
-		}
-
+		// Keep the original text as-is (paths stay visible in chat),
+		// just attach the actual image data alongside
 		return {
 			action: "transform",
-			text: strippedText,
+			text: fullText,
 			images: [...(event.images ?? []), ...usedImages],
 		};
 	});
