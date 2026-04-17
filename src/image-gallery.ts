@@ -1,10 +1,36 @@
 import {
 	type Component,
 	getCapabilities,
+	type ImageProtocol,
 	getImageDimensions,
 	calculateImageRows,
 	getCellDimensions,
 } from "@mariozechner/pi-tui";
+
+/**
+ * Detect image protocol support, working around pi-tui ≥0.67.6 which
+ * hardcodes `images: null` inside tmux/screen for safety. Our extension
+ * uses the Unicode placeholder protocol which is specifically designed
+ * to work inside tmux, so we can safely detect kitty-in-tmux ourselves.
+ */
+function detectImageProtocol(): ImageProtocol | null {
+	const caps = getCapabilities();
+	if (caps.images) return caps.images;
+
+	// pi-tui returns null inside tmux — check if the outer terminal is kitty
+	const inTmux = !!process.env.TMUX || (process.env.TERM?.toLowerCase() || "").startsWith("tmux");
+	if (inTmux) {
+		if (process.env.KITTY_WINDOW_ID || (process.env.TERM_PROGRAM?.toLowerCase() || "") === "kitty") {
+			return "kitty";
+		}
+		// ghostty and wezterm also support kitty graphics in tmux
+		const termProgram = process.env.TERM_PROGRAM?.toLowerCase() || "";
+		if (termProgram === "ghostty" || process.env.GHOSTTY_RESOURCES_DIR) return "kitty";
+		if (termProgram === "wezterm" || process.env.WEZTERM_PANE) return "kitty";
+	}
+
+	return null;
+}
 
 export interface GalleryTheme {
 	accent: (s: string) => string;
@@ -230,7 +256,7 @@ export class ImageGallery implements Component {
 		}
 
 		const lines: string[] = [];
-		const caps = getCapabilities();
+		const imageProtocol = detectImageProtocol();
 
 		// Header
 		const count = this.images.length;
@@ -240,7 +266,7 @@ export class ImageGallery implements Component {
 				: ` 📎 ${count} images attached`;
 		lines.push(this.theme.accent(headerText));
 
-		if (caps.images === "kitty") {
+		if (imageProtocol === "kitty") {
 			this.renderKittyHorizontal(lines, width);
 		} else {
 			this.renderTextFallback(lines);
