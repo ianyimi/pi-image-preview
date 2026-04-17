@@ -20,6 +20,7 @@ export interface GalleryImage {
 }
 
 const THUMB_MAX_WIDTH = 25;
+const THUMB_MAX_ROWS = 15; // cap height so tall images don't overflow the terminal
 const GAP = 2; // columns between images
 
 // Monotonic counter for kitty image IDs — avoids birthday-paradox collisions
@@ -276,7 +277,10 @@ export class ImageGallery implements Component {
 				heightPx: 600,
 			};
 
-			const rows = calculateImageRows(dims, thumbWidth, getCellDimensions());
+			const rows = Math.min(
+				calculateImageRows(dims, thumbWidth, getCellDimensions()),
+				THUMB_MAX_ROWS,
+			);
 			const imageId = allocateImageId();
 			this.activeImageIds.push(imageId);
 
