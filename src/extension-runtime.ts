@@ -75,7 +75,7 @@ const POLL_INTERVAL_MS = 250;
 // Supports common path characters including spaces (escaped with \),
 // parens, #, +, and other special characters.
 const IMAGE_PATH_RE =
-	/((?:~\/|\.\.?\/|\/)[^\s:*?"<>|][^\s:*?"<>|]*\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
+	/((?:~\/|\.\.?\/|\/)[^\n\r:*?"<>|][^\n\r:*?"<>|]*\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
 
 /** Produce a label from an image path — just the filename. */
 function trimImageLabel(filePath: string): string {
