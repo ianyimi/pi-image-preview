@@ -1,5 +1,81 @@
+import path from "node:path";
+import type { ImageContent, ContentBlock } from "./content.ts";
+import { ImageGallery, type GalleryImage } from "./image-gallery.ts";
+import { upgradeScreenshotToolResult } from "./tool-result-upgrader.ts";
+import { debugLog } from "./debug.ts";
+
+// ── Types ──────────────────────────────────────────────────
+
+type TrackedImage = {
+	filePath: string;
+	image: ImageContent;
+	label: string;
+};
+
+export type ExtensionDeps = {
+	readImageContentFromPathAsync: (
+		filePath: string,
+	) => Promise<ImageContent | null>;
+	maybeResizeImage?: (image: ImageContent) => Promise<ImageContent>;
+	loadImageContentFromPath: (
+		filePath: string,
+	) => Promise<ImageContent | null>;
+};
+
+type PiLike = {
+	on(event: string, handler: (...args: any[]) => any): void;
+	sendUserMessage(
+		content: string | ContentBlock[],
+		options?: { deliverAs?: "steer" | "followUp" },
+	): void;
+};
+
+type CtxLike = {
+	cwd: string;
+	isIdle(): boolean;
+	ui: {
+		setWidget(
+			key: string,
+			content:
+				| string[]
+				| ((tui: any, theme: any) => any)
+				| undefined,
+			options?: { placement?: "aboveEditor" | "belowEditor" },
+		): void;
+		getEditorText(): string;
+		setEditorText(text: string): void;
+		theme: any;
+	};
+};
+
+/** Event shape for the "input" event from pi. */
+type InputEvent = {
+	text: string;
+	images?: ImageContent[];
+};
+
+/** Discriminated union for input handler return values. */
+type InputResult =
+	| { action: "continue" }
+	| { action: "handled" }
+	| { action: "transform"; text: string; images: ImageContent[] };
+
+/** Re-export for tool_result event typing. */
+type ToolResultEvent = import("./tool-result-upgrader.ts").ToolResultEventLike;
+
+// ── Constants ──────────────────────────────────────────────
+
+const WIDGET_KEY = "image-preview";
+const POLL_INTERVAL_MS = 250;
+
+// Matches image file paths:
+//   - Absolute: /path/to/image.png
+//   - Home-relative: ~/screenshots/image.png
+//   - Relative: ./images/image.png, ../images/image.png
+// Supports common path characters including spaces (escaped with \),
+// parens, #, +, and other special characters.
 const IMAGE_PATH_RE =
-	/((?:~\/|\.\.?\/|\/)[^\n\r:*?"<>|][^\n\r:*?"<>|]*\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
+	/((?:~\/|\.\.?\/|\/)[^\s:*?"<>|][^\s:*?"<>|]*\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
 
 /** Produce a label from an image path — just the filename. */
 function trimImageLabel(filePath: string): string {
